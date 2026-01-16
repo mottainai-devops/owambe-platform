@@ -7,6 +7,7 @@ import { agentRouter } from "./routers-agent";
 import { paymentRouter } from "./routers-payment";
 import { reviewsRouter } from "./routers-reviews";
 import { notificationsRouter, messagingRouter, loyaltyRouter, searchRouter } from "./routers-features";
+import { emailRouter } from "./routers-email";
 
 export const appRouter = router({
   system: systemRouter,
@@ -18,6 +19,7 @@ export const appRouter = router({
   messaging: messagingRouter,
   loyalty: loyaltyRouter,
   search: searchRouter,
+  email: emailRouter,
 
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),

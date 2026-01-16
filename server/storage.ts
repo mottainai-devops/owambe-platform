@@ -1,105 +1,83 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uses the Biz-provided storage proxy (Authorization: Bearer <token>)
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { nanoid } from "nanoid";
 
-import { ENV } from './_core/env';
+// Configure AWS S3 client
+// In production, these variables will be provided by the environment
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  },
+});
 
-type StorageConfig = { baseUrl: string; apiKey: string };
+const BUCKET_NAME = process.env.S3_BUCKET_NAME || "owambe-storage";
 
-function getStorageConfig(): StorageConfig {
-  const baseUrl = ENV.forgeApiUrl;
-  const apiKey = ENV.forgeApiKey;
-
-  if (!baseUrl || !apiKey) {
-    throw new Error(
-      "Storage proxy credentials missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY"
-    );
-  }
-
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
-}
-
-function buildUploadUrl(baseUrl: string, relKey: string): URL {
-  const url = new URL("v1/storage/upload", ensureTrailingSlash(baseUrl));
-  url.searchParams.set("path", normalizeKey(relKey));
-  return url;
-}
-
-async function buildDownloadUrl(
-  baseUrl: string,
-  relKey: string,
-  apiKey: string
-): Promise<string> {
-  const downloadApiUrl = new URL(
-    "v1/storage/downloadUrl",
-    ensureTrailingSlash(baseUrl)
-  );
-  downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "GET",
-    headers: buildAuthHeaders(apiKey),
-  });
-  return (await response.json()).url;
-}
-
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
-}
-
-function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
-}
-
-function toFormData(
-  data: Buffer | Uint8Array | string,
-  contentType: string,
-  fileName: string
-): FormData {
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-  const form = new FormData();
-  form.append("file", blob, fileName || "file");
-  return form;
-}
-
-function buildAuthHeaders(apiKey: string): HeadersInit {
-  return { Authorization: `Bearer ${apiKey}` };
-}
-
+/**
+ * Upload a file to S3 storage
+ * @param relKey The relative key/path for the file (ignored in this implementation, we generate a unique key)
+ * @param data The file content
+ * @param contentType The MIME type of the file
+ * @returns Object containing the key and public URL
+ */
 export async function storagePut(
-  relKey: string,
+  relKey: string, // Kept for signature compatibility, but we generate unique keys
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
-  const { baseUrl, apiKey } = getStorageConfig();
-  const key = normalizeKey(relKey);
-  const uploadUrl = buildUploadUrl(baseUrl, key);
-  const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const key = `${nanoid()}-${Date.now()}`;
+  
+  // Convert data to Buffer if it's a string
+  const body = typeof data === 'string' ? Buffer.from(data) : data;
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage upload failed (${response.status} ${response.statusText}): ${message}`
-    );
+  try {
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      // ACL: "public-read", // Note: Many S3 buckets block public ACLs by default now
+    });
+
+    await s3Client.send(command);
+
+    // If the bucket is public, we can construct the URL directly
+    // Otherwise, we might need to generate a signed URL or use CloudFront
+    const url = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com/${key}`;
+    
+    return { key, url };
+  } catch (error) {
+    console.error("Error uploading to S3:", error);
+    throw new Error("Failed to upload file to storage");
   }
-  const url = (await response.json()).url;
-  return { key, url };
 }
 
+/**
+ * Get a signed URL for reading a file (if bucket is private)
+ * or return the public URL
+ */
 export async function storageGet(
   relKey: string,
   _expiresIn = 300
-): Promise<{ key: string; url: string; }> {
-  const { baseUrl, apiKey } = getStorageConfig();
-  const key = normalizeKey(relKey);
-  return {
-    key,
-    url: await buildDownloadUrl(baseUrl, key, apiKey),
-  };
+): Promise<{ key: string; url: string }> {
+  // For public buckets, just return the URL if it's already a full URL
+  if (relKey.startsWith("http")) {
+    return { key: relKey, url: relKey };
+  }
+  
+  // If it's just a key, generate a signed URL
+  try {
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: relKey,
+    });
+    
+    // URL expires in 1 hour
+    const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    return { key: relKey, url };
+  } catch (error) {
+    console.error("Error generating signed URL:", error);
+    return { key: relKey, url: relKey }; // Fallback
+  }
 }

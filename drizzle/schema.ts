@@ -1,4 +1,4 @@
-import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { boolean, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -33,6 +33,7 @@ export const events = mysqlTable("events", {
   price: int("price").notNull(), // in cents
   imageUrl: varchar("imageUrl", { length: 500 }),
   status: mysqlEnum("status", ["draft", "published", "cancelled", "completed"]).default("draft").notNull(),
+  slug: varchar("slug", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
 });
@@ -55,6 +56,7 @@ export const venues = mysqlTable("venues", {
   imageUrl: varchar("imageUrl", { length: 500 }),
   ownerId: varchar("ownerId", { length: 64 }).notNull(),
   status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
+  slug: varchar("slug", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow(),
 });
 
@@ -76,6 +78,7 @@ export const hotels = mysqlTable("hotels", {
   imageUrl: varchar("imageUrl", { length: 500 }),
   ownerId: varchar("ownerId", { length: 64 }).notNull(),
   status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
+  slug: varchar("slug", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow(),
 });
 
@@ -171,12 +174,18 @@ export const b2bPartners = mysqlTable("b2bPartners", {
   id: varchar("id", { length: 64 }).primaryKey(),
   userId: varchar("userId", { length: 64 }).notNull(),
   companyName: varchar("companyName", { length: 255 }).notNull(),
-  businessType: mysqlEnum("businessType", ["venue_owner", "hotel_owner", "event_organizer", "agent"]).notNull(),
+  businessTypes: json("businessTypes").notNull(), // Changed from single enum to JSON array
+  businessDescription: text("businessDescription"),
   contactEmail: varchar("contactEmail", { length: 320 }),
   contactPhone: varchar("contactPhone", { length: 50 }),
   status: mysqlEnum("status", ["pending", "approved", "rejected", "suspended"]).default("pending").notNull(),
   credits: int("credits").default(0),
+  reviewedBy: varchar("reviewedBy", { length: 64 }),
+  reviewedAt: timestamp("reviewedAt"),
+  rejectionReason: text("rejectionReason"),
+  slug: varchar("slug", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow(),
 });
 
 export type B2BPartner = typeof b2bPartners.$inferSelect;
@@ -934,3 +943,61 @@ export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type LoyaltyPoints = typeof loyaltyPoints.$inferSelect;
 
+
+// --- v1.1.0 Updates: Email System & SEO ---
+
+// Email Settings Table
+export const emailSettings = mysqlTable("emailSettings", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  smtpHost: varchar("smtpHost", { length: 255 }).notNull(),
+  smtpPort: int("smtpPort").notNull(),
+  smtpSecure: boolean("smtpSecure").default(true),
+  smtpUser: varchar("smtpUser", { length: 255 }).notNull(),
+  smtpPassword: varchar("smtpPassword", { length: 255 }).notNull(),
+  fromEmail: varchar("fromEmail", { length: 320 }).notNull(),
+  fromName: varchar("fromName", { length: 255 }).notNull(),
+  replyToEmail: varchar("replyToEmail", { length: 320 }),
+  isActive: boolean("isActive").default(true),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow(),
+});
+
+export type EmailSettings = typeof emailSettings.$inferSelect;
+export type InsertEmailSettings = typeof emailSettings.$inferInsert;
+
+// Email Events Table
+export const emailEvents = mysqlTable("emailEvents", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  eventName: varchar("eventName", { length: 100 }).notNull(),
+  eventLabel: varchar("eventLabel", { length: 255 }).notNull(),
+  eventDescription: text("eventDescription"),
+  recipientType: mysqlEnum("recipientType", ["user", "partner", "admin", "custom"]).notNull(),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  htmlTemplate: text("htmlTemplate").notNull(),
+  textTemplate: text("textTemplate"),
+  isActive: boolean("isActive").default(true),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow(),
+});
+
+export type EmailEvent = typeof emailEvents.$inferSelect;
+export type InsertEmailEvent = typeof emailEvents.$inferInsert;
+
+// Email Logs Table
+export const emailLogs = mysqlTable("emailLogs", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  eventName: varchar("eventName", { length: 100 }).notNull(),
+  recipientEmail: varchar("recipientEmail", { length: 320 }).notNull(),
+  recipientName: varchar("recipientName", { length: 255 }),
+  recipientType: varchar("recipientType", { length: 50 }),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  status: mysqlEnum("status", ["pending", "sent", "failed", "bounced"]).default("pending"),
+  sentAt: timestamp("sentAt"),
+  failureReason: text("failureReason"),
+  retryCount: int("retryCount").default(0),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow(),
+});
+
+export type EmailLog = typeof emailLogs.$inferSelect;
+export type InsertEmailLog = typeof emailLogs.$inferInsert;
